@@ -1,0 +1,438 @@
+---
+title: "APE_project"
+output: html_document
+date: "2025-11-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("Biostrings")
+# BiocManager::install("mzR")
+# BiocManager::install("Spectra")
+
+# install.packages("microseq")
+library(microseq)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+
+df <- readFasta("iPRG2015.fasta")
+
+head(df)
+```
+
+
+## Create decoy 
+```{r}
+reverse_string <- function(x) {
+  paste0(rev(strsplit(x, "")[[1]]), collapse = "")
+}
+
+decoy <- df
+decoy$Sequence <- sapply(df$Sequence, reverse_string)
+
+decoy$Header <- sub("^sp\\|", "sp|D_", df$Header)
+
+```
+
+## Save decoy
+
+```{r}
+write_fasta <- function(df, file) {
+  con <- file(file, "w")
+  on.exit(close(con))
+
+  for (i in seq_len(nrow(df))) {
+    header <- paste0(">", df$Header[i])
+    seq    <- df$Sequence[i]
+
+    writeLines(header, con)
+    writeLines(seq, con)
+  }
+}
+
+write_fasta(decoy, "decoy.fasta")
+```
+
+
+
+# Load SearchGUI results 
+
+```{r}
+library(mzR)
+# load target
+filename_t <- "searchgui_results/target_results/JD_06232014_sample1-A.comet.pep.xml.gz"
+mzid_t <- openIDfile(filename_t)
+
+# Combine Data and Scores 
+df_t <- cbind(psms(mzid_t), score(mzid_t))
+
+# Select only necessary columns 
+target_clean <- df_t[, c("spectrumID", "experimentalMassToCharge", "chargeState", "sequence", "Comet.xcorr", "Comet.deltacn")]
+colnames(target_clean) <- c("spectrumID", "mass", "charge", "Target_Sequence", "Target_Score", "Target_Delta")
+
+
+# load decoy
+filename_d <- "searchgui_results/decoy_results/JD_06232014_sample1-A.comet.pep.xml.gz" 
+mzid_d <- openIDfile(filename_d)
+
+df_d <- cbind(psms(mzid_d), score(mzid_d))
+
+# Select only necessary columns and rename
+decoy_clean <- df_d[, c("spectrumID", "sequence", "Comet.xcorr", "Comet.deltacn")]
+colnames(decoy_clean) <- c("spectrumID", "Decoy_Sequence", "Decoy_Score", "Decoy_Delta")
+
+
+# merge by spectrumID
+full_matrix <- merge(target_clean, decoy_clean, by="spectrumID", all=TRUE)
+
+head(full_matrix)
+```
+
+## Target score density 
+```{r}
+library(ggplot2)
+ggplot(full_matrix, aes(x = Target_Score)) + 
+  geom_density(fill='blue', alpha = 0.5) + 
+  theme_minimal() + 
+  labs(
+    x = 'Target Score', 
+    y = "Density"
+  )
+```
+
+## Decoy score density 
+```{r}
+ggplot(full_matrix, aes(x = Decoy_Score)) + 
+  geom_density(fill='red', alpha = 0.5) + 
+  theme_minimal() + 
+  labs(
+    x = 'Decoy Score', 
+    y = 'Density'
+  )
+
+```
+
+## Concatenated database (using pmax)
+
+```{r}
+# Handle NAs
+full_matrix$Target_Score[is.na(full_matrix$Target_Score)] <- -1
+full_matrix$Decoy_Score[is.na(full_matrix$Decoy_Score)] <- -1
+
+combined <- full_matrix
+
+combined$Final_Score <- pmax(full_matrix$Target_Score, full_matrix$Decoy_Score)
+
+# Assign the winning label
+combined$Label <- ifelse(full_matrix$Target_Score >= full_matrix$Decoy_Score, "Target", "Decoy")
+
+# Keep the winning sequence
+combined$Final_Sequence <- ifelse(combined$Label == "Target", full_matrix$Target_Sequence, full_matrix$Decoy_Sequence)
+
+```
+
+## Winning score density, colored by group (target vs decoy)
+```{r}
+ggplot(combined, aes(x = Final_Score, fill=Label)) + 
+  geom_density(alpha = 0.5) + 
+  theme_minimal() + 
+  labs(
+    x = 'Score',
+    y = 'Density'
+  )
+  
+```
+
+
+
+
+## GLOBAL FDR Concatenated (0.01)
+
+```{r}
+# Sort the dataframe by Final_Score (descending)
+combined_sorted <- combined[order(combined$Final_Score, decreasing = TRUE), ]
+
+# Create numeric columns for counting
+combined_sorted$is_target <- as.numeric(combined_sorted$Label == "Target")
+combined_sorted$is_decoy  <- as.numeric(combined_sorted$Label == "Decoy")
+
+# Calculate the cumulative (running) sum for targets and decoys
+combined_sorted$cum_target <- cumsum(combined_sorted$is_target)
+combined_sorted$cum_decoy  <- cumsum(combined_sorted$is_decoy)
+
+# Calculate the FDR at every row
+combined_sorted$FDR <- combined_sorted$cum_decoy / combined_sorted$cum_target
+
+# Find the last row where the FDR is at or below 0.01
+valid_rows <- which(combined_sorted$FDR <= 0.01)
+
+# Check if any rows met the criteria before taking the max
+if (length(valid_rows) > 0) {
+  last_good_index <- max(valid_rows)
+  last_good_fdr <- combined_sorted$FDR[last_good_index]
+} else {
+  last_good_index <- 0
+  last_good_fdr <- NA
+}
+
+
+print(paste("Total Number of PSM:", nrow(combined_sorted)))
+print(paste("Stop at Index:", last_good_index))
+print(paste("FDR:", last_good_fdr))
+```
+
+
+
+## Plot of the FDR as a function of the row index
+```{r}
+df_fdr <- data.frame(
+  FDR = combined_sorted$FDR,              
+  Index = seq_len(nrow(combined_sorted))  
+)
+
+ggplot(df_fdr, aes(x = Index, y = FDR)) + 
+  geom_line(color='red') + 
+  geom_hline(yintercept = last_good_fdr, linetype = "dashed") +
+  geom_vline(xintercept = last_good_index, linetype = "dashed") + 
+  geom_point(aes(x = last_good_index, y = last_good_fdr), size = 2) + 
+  theme_minimal() + 
+  labs(
+    x = 'Row Index',
+    y = 'FDR'
+  )
+```
+
+
+## How often is "Target_score" > "Decoy_score"?
+```{r}
+mean(combined$Label == "Target")
+```
+
+## Histogram of the absolute difference between the target score and the decoy score for each fragment
+```{r}
+combined$Abs_Diff <- abs(combined$Target_Score - combined$Decoy_Score)
+
+ggplot(combined, aes(x = Abs_Diff)) +
+  geom_histogram(bins = 500, color='#91C6BC') + 
+  theme_minimal() + 
+  labs(
+    x = 'Absolute Difference (Target - Decoy)',
+    y = 'Count'
+  )
+
+
+```
+
+## How does the difference between Target Score - Decoy Score change as a function of the row limit? 
+
+```{r}
+combined_sorted2 <- combined_sorted
+combined_sorted2$Diff <- combined_sorted2$Target_Score - combined_sorted2$Decoy_Score 
+combined_sorted2$Sign <- combined_sorted2$Diff > 0
+
+
+
+
+ggplot(combined_sorted2, aes(x = seq_len(nrow(combined_sorted2)), y = Diff, color = Sign)) +
+  geom_point() +
+  labs(x = "Row Index", y = "Target_Score minus Decoy_Score") + 
+  theme_minimal() + 
+  labs(
+    x = "Row Index",
+    y = "Target Score minus Decoy Score",
+    color = "Target score minus Decoy score"  
+  ) +
+  scale_color_manual(values = c("FALSE" = "red", "TRUE" = "blue"), labels = c("Negative difference", "Positive difference")) + 
+  geom_vline(xintercept = last_good_index, linetype = "dashed")
+
+```
+
+
+## Does the score distribution change by charge?
+```{r}
+ggplot(combined_sorted, aes(x = Final_Score, fill = factor(charge))) + 
+  geom_density(alpha = 0.4) +
+  labs(fill = "Charge") + 
+  xlim(0, 7) + 
+  theme_minimal()
+
+```
+
+
+## GLOBAL FDR un-concatenated 
+
+```{r}
+
+# Stack the two clean dataframes on top of each other
+t_simple <- target_clean[, c("Target_Score", "Target_Sequence")]
+colnames(t_simple) <- c("Score", "Sequence")
+t_simple$Label <- "Target"
+
+d_simple <- decoy_clean[, c("Decoy_Score", "Decoy_Sequence")]
+colnames(d_simple) <- c("Score", "Sequence")
+d_simple$Label <- "Decoy"
+
+# Bind them
+unconcatenated_df <- rbind(t_simple, d_simple)
+
+# Sort by Score
+unconcatenated_sorted <- unconcatenated_df[order(unconcatenated_df$Score, decreasing = TRUE), ]
+
+# Calculate FDR (Same logic as before)
+unconcatenated_sorted$is_target <- as.numeric(unconcatenated_sorted$Label == "Target")
+unconcatenated_sorted$is_decoy  <- as.numeric(unconcatenated_sorted$Label == "Decoy")
+
+unconcatenated_sorted$cum_target <- cumsum(unconcatenated_sorted$is_target)
+unconcatenated_sorted$cum_decoy  <- cumsum(unconcatenated_sorted$is_decoy)
+
+unconcatenated_sorted$FDR <- unconcatenated_sorted$cum_decoy / unconcatenated_sorted$cum_target
+
+
+valid_rows <- which(unconcatenated_sorted$FDR <= 0.01)
+last_good_index_unconc <- max(valid_rows)
+score_threshold_unconc <- unconcatenated_sorted$Score[last_good_index_unconc]
+num_confident_unconc <- unconcatenated_sorted$cum_target[last_good_index_unconc]
+
+# Compare the results between concatenated and un-concatenated
+
+print(paste("Concatenated (Emulated) Confident Targets:", last_good_index)) 
+print(paste("Un-concatenated Confident Targets:", num_confident_unconc))
+
+```
+
+
+```{r}
+# Create a dataframe for the Concatenated (Emulated) results
+fdr_concat_df <- data.frame(
+  Accepted_Targets = combined_sorted$cum_target,
+  FDR = combined_sorted$FDR,
+  Method = "Concatenated (Emulated)"
+)
+
+
+fdr_unconcat_df <- data.frame(
+  Accepted_Targets = unconcatenated_sorted$cum_target,
+  FDR = unconcatenated_sorted$FDR,
+  Method = "Un-concatenated"
+)
+
+fdr_comparison_df <- rbind(fdr_concat_df, fdr_unconcat_df)
+
+
+ggplot(fdr_comparison_df, aes(x = Accepted_Targets, y = FDR, color = Method)) +
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 0.01, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = last_good_index, linetype = "dotted", color = "blue") +
+  geom_vline(xintercept = num_confident_unconc, linetype = "dotted", color = "red") +
+  geom_point(aes(x = last_good_index, y = 0.01), color = "blue", size = 2) +
+  geom_point(aes(x = num_confident_unconc, y = 0.01), color = "red", size = 2) +
+  labs(
+       x = "Row Index",
+       y = "FDR",
+       color = "Search Strategy") +
+  scale_color_manual(values = c("Concatenated (Emulated)" = "blue", "Un-concatenated" = "red")) +
+  theme_minimal() + 
+  ylim(0, 0.25) + 
+  xlim(0, 30000)
+```
+
+
+
+
+# Local FDR 
+
+Create subsample of top 100 peptides with the highest score 
+```{r}
+# # Get the top 100 rows
+# top_100_rows <- head(combined_sorted, 100)
+# 
+# # Extract the Scan Numbers
+# library(stringr)
+# 
+# top_100_scans <- as.integer(str_extract(top_100_rows$spectrumID, "(?<=scan=)[0-9]+"))
+# 
+# head(top_100_scans)
+```
+
+```{r}
+# library(Spectra)
+# 
+# original_mzml <- "JD_06232014_sample1-A.mzML" 
+# spectra_data <- Spectra(original_mzml, source = MsBackendMzR())
+# 
+# # Filter for the 100 scans identified
+# subset_spectra <- filterAcquisitionNum(spectra_data, top_100_scans)
+# 
+# length(subset_spectra) 
+# 
+# # Export to a new file
+# export(subset_spectra, backend = MsBackendMzR(), file = "top100.mzML")
+```
+
+
+## Load the searchgui results of the analysis on the top 100
+```{r}
+# load target
+filename_t <- "searchgui_results/top100_target_results/top100.comet.pep.xml.gz"
+mzid_t <- openIDfile(filename_t)
+# Combine data and scores
+df_t <- cbind(psms(mzid_t), score(mzid_t))
+
+# Select only necessary columns
+target_clean <- df_t[, c("spectrumID", "experimentalMassToCharge", "chargeState", "rank", "sequence", "Comet.xcorr", "Comet.deltacn")]
+colnames(target_clean) <- c("spectrumID", "mass", "charge","rank", "Target_Sequence", "Target_Score", "Target_Delta")
+
+```
+
+
+```{r}
+
+# Create a grouping column
+target_clean$Rank_Group <- ifelse(target_clean$rank == 1, "Rank 1", "Rank 2-100")
+target_clean$Rank_Group <- factor(target_clean$Rank_Group, levels = c("Rank 2-100", "Rank 1"))
+
+table(target_clean$Rank_Group)
+```
+
+## Plot the per-spectrum score distribution
+
+```{r}
+ggplot(target_clean, aes(x = reorder(factor(spectrumID), Target_Score, FUN = median), y = Target_Score)) + 
+  geom_jitter(data = subset(target_clean, rank > 1), 
+              color = "grey70", size = 1, alpha = 0.5, width = 0.2) +
+  geom_boxplot(data = subset(target_clean, rank > 1), 
+               outlier.shape = NA, 
+               color = "black", fill = NA, alpha = 0.5) +
+  geom_point(data = subset(target_clean, rank == 1), 
+             color = "red", size = 1) +
+  labs(
+       x = "Spectrum ID (Sorted by Median Noise)",
+       y = "Comet XCorr") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), panel.grid.major.x = element_blank())
+```
+
+
+```{r}
+ggplot(target_clean, aes(x = Target_Score, fill = Rank_Group)) +
+  geom_histogram(position = "identity", alpha = 0.6, binwidth = 0.1, color="white") +
+  scale_fill_manual(values = c("Rank 1" = "red", "Rank 2-100" = "grey")) +
+  labs(
+       x = "XCorr Score",
+       y = "Count",
+       fill = "Match Rank") +
+  theme_minimal()
+```
+
+
+
