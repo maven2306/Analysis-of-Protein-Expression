@@ -36,7 +36,7 @@ BiocManager::install(c("mzR", "Spectra", "MsBackendMzR", "Biostrings"))
 ### How to Reproduce the Analysis
 #### Step 1: Data Acquisition
 The raw mass spectrometry file (JD_06232014_sample1-A.raw) is too large to be included in this repository.
-1. Download the file from the ProteomeXchange repository: PXD015300.
+1. Download the file from the ProteomeXchange repository: [PXD015300](https://proteomecentral.proteomexchange.org/cgi/GetDataset?ID=PXD015300).
 2. Convert the .raw file to .mzML format using a tool like ProteoWizard's msConvert.
 3. Place the resulting JD_06232014_sample1-A.mzML file in the root directory of this project.
 #### Step 2: Running the SearchGUI Analysis
