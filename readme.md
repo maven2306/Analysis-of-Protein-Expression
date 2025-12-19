@@ -31,6 +31,7 @@ if (!require("BiocManager", quietly = TRUE))
 
 BiocManager::install(c("mzR", "Spectra", "MsBackendMzR", "Biostrings"))
 
+```
 
 ### How to Reproduce the Analysis
 #### Step 1: Data Acquisition
