@@ -11,7 +11,6 @@ The primary finding is that the concatenated approach, which incorporates a comp
 ### Software
 *   **SearchGUI:** (Version 4.3.17 or similar) for running the Comet search engine. [Download here](https://compomics.github.io/projects/searchgui.html).
 *   **R:** (Version 4.0 or later) for data analysis. [Download here](https://www.r-project.org/).
-*   **RStudio:** (Recommended) An integrated development environment for R. [Download here](https://www.rstudio.com/).
 
 ### R Packages
 Run the following commands in your R console to install the necessary packages.
