@@ -25,7 +25,7 @@ library(ggplot2)
 
 ```{r}
 
-df <- readFasta("iPRG2015.fasta")
+df <- readFasta("Data/iPRG2015.fasta")
 
 head(df)
 ```
@@ -70,7 +70,7 @@ write_fasta(decoy, "decoy.fasta")
 ```{r}
 library(mzR)
 # load target
-filename_t <- "searchgui_results/target_results/JD_06232014_sample1-A.comet.pep.xml.gz"
+filename_t <- "search_results/target_results/JD_06232014_sample1-A.comet.pep.xml.gz"
 mzid_t <- openIDfile(filename_t)
 
 # Combine Data and Scores 
@@ -82,7 +82,7 @@ colnames(target_clean) <- c("spectrumID", "mass", "charge", "Target_Sequence", "
 
 
 # load decoy
-filename_d <- "searchgui_results/decoy_results/JD_06232014_sample1-A.comet.pep.xml.gz" 
+filename_d <- "search_results/decoy_results/JD_06232014_sample1-A.comet.pep.xml.gz" 
 mzid_d <- openIDfile(filename_d)
 
 df_d <- cbind(psms(mzid_d), score(mzid_d))
@@ -383,7 +383,7 @@ Create subsample of top 100 peptides with the highest score
 ## Load the searchgui results of the analysis on the top 100
 ```{r}
 # load target
-filename_t <- "searchgui_results/top100_target_results/top100.comet.pep.xml.gz"
+filename_t <- "search_results/top100_target_results/top100.comet.pep.xml.gz"
 mzid_t <- openIDfile(filename_t)
 # Combine data and scores
 df_t <- cbind(psms(mzid_t), score(mzid_t))
